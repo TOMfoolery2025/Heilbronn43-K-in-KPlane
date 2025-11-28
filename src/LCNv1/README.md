@@ -185,12 +185,76 @@ src/LCNv1/
     └── test_solver.py
 ```
 
+## 🌐 Environment Requirements
+
+### System Requirements
+- **Operating System**: Windows 10/11 (primary), Linux/macOS (compatible)
+- **Python**: 3.9+ (recommended 3.10+, tested on 3.11.4)
+- **Memory**: 4GB RAM minimum, 8GB+ recommended for large graphs
+
+### Core Dependencies
+```bash
+numpy             # v1.24+ - Numerical arrays and operations
+numba             # v0.58+ - JIT compilation for Python
+pytest            # v7.0+ - Testing framework
+```
+
+### Optional Dependencies
+
+#### For GUI (CustomTkinter Application)
+```bash
+customtkinter     # Modern GUI framework
+matplotlib        # Graph visualization
+networkx          # Graph algorithms
+packaging         # Version utilities
+```
+
+#### For GPU Acceleration (CUDA Strategy)
+```bash
+cupy-cuda12x      # CUDA array library (GPU arrays)
+pybind11          # Python-C++ binding for custom kernels
+```
+
+**Hardware Requirements for CUDA**:
+- **GPU**: NVIDIA GPU with compute capability 8.0+
+  - Tested: RTX 4060 (8GB VRAM, compute 8.9)
+  - Minimum: GTX 1060 or equivalent
+- **CUDA Toolkit**: 12.0+ (tested on 12.6.20)
+- **Compiler**: Visual Studio 2022 with MSVC (Windows) or GCC 9+ (Linux)
+
+**CUDA Installation Paths**:
+- Windows: `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6`
+- Linux: `/usr/local/cuda-12.6`
+
+### Virtual Environment Setup
+
+```bash
+# Create virtual environment
+python -m venv heilbron-43
+
+# Activate (Windows PowerShell)
+.\heilbron-43\Scripts\Activate.ps1
+
+# Activate (Linux/macOS)
+source heilbron-43/bin/activate
+
+# Upgrade pip
+python -m pip install --upgrade pip
+```
+
 ## 🚀 Quick Start
 
 ### Install Dependencies
 
 ```bash
+# Core dependencies (required)
 pip install numpy numba pytest
+
+# Optional: GUI dependencies
+pip install customtkinter matplotlib networkx packaging
+
+# Optional: CUDA acceleration
+pip install cupy-cuda12x pybind11
 ```
 
 ### Basic Usage

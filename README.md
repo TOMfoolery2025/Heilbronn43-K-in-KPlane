@@ -2,6 +2,38 @@
 
 This repository contains a small GUI and optimizer to reduce edge crossings (k-planarity) of a graph. The GUI is built with CustomTkinter + Matplotlib; the optimizer uses a simulated annealing approach.
 
+## Environment Requirements
+
+### System Requirements
+- **Operating System**: Windows 10/11
+- **Python**: 3.9+ (3.10 or newer recommended, tested on 3.11.4)
+- **Shell**: Windows PowerShell
+
+### Python Dependencies
+```
+customtkinter      # Modern GUI framework
+matplotlib         # Plotting and visualization
+numpy             # Numerical operations
+packaging         # Version handling
+networkx          # Graph algorithms
+```
+
+### Optional: GPU Acceleration (CUDA)
+For high-performance CUDA acceleration:
+
+- **CUDA Toolkit**: 12.6.20 or compatible
+- **GPU**: NVIDIA GPU with compute capability 8.0+ (tested on RTX 4060)
+- **Compiler**: Visual Studio 2022 with C++ build tools
+- **Additional Python Packages**:
+  - `pybind11` - Python-C++ binding
+  - `pytest` - Testing framework
+  - `cupy-cuda12x` - CUDA array library (optional)
+
+**CUDA Installation Path** (Windows default):
+```
+C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6
+```
+
 ## Prerequisites
 - Python 3.9+ (3.10 or newer recommended)
 - Windows PowerShell (these commands are written for PowerShell)
