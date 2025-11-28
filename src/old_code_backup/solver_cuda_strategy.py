@@ -3,7 +3,21 @@ GPU 加速的求解器策略
 結合 CUDA C++ 核心和 Python 邏輯
 """
 import sys
+import os
 sys.path.insert(0, 'src')
+
+# 修復 Windows CUDA DLL 加載問題
+if sys.platform == 'win32' and hasattr(os, 'add_dll_directory'):
+    cuda_paths = [
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin',
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin',
+    ]
+    for cuda_path in cuda_paths:
+        if os.path.exists(cuda_path):
+            try:
+                os.add_dll_directory(cuda_path)
+            except:
+                pass
 
 import numpy as np
 import json
@@ -65,23 +79,22 @@ class CUDASolverStrategy(ISolverStrategy):
         # 構建圖
         nodes = data['nodes']
         edges = data['edges']
+        width = data.get('width', 1000000)
+        height = data.get('height', 1000000)
         
         num_nodes = len(nodes)
-        adjacency = [[] for _ in range(num_nodes)]
         edge_list = []
         
         for edge in edges:
             src = edge['source']
             tgt = edge['target']
-            adjacency[src].append(len(edge_list))
-            adjacency[tgt].append(len(edge_list))
             edge_list.append((src, tgt))
         
-        self.graph = GraphData(num_nodes, edge_list, adjacency)
+        self.graph = GraphData(num_nodes, edge_list)
         
         # 初始位置
         positions = {node['id']: Point(node['x'], node['y']) for node in nodes}
-        self.state = GridState(num_nodes, positions)
+        self.state = GridState(positions, width, height)
         
         # 準備 GPU 數組
         self._prepare_gpu_arrays()

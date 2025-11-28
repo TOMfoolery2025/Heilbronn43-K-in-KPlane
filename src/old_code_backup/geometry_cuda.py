@@ -2,7 +2,23 @@
 CUDA 加速的幾何計算核心
 使用 PyCUDA 或 CuPy 調用 .cu 文件中的 CUDA kernels
 """
+import sys
+import os
 import numpy as np
+
+# 修復 Windows CUDA DLL 加載問題
+if sys.platform == 'win32' and hasattr(os, 'add_dll_directory'):
+    cuda_paths = [
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin',
+        r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.0\bin',
+    ]
+    for cuda_path in cuda_paths:
+        if os.path.exists(cuda_path):
+            try:
+                os.add_dll_directory(cuda_path)
+            except:
+                pass
+
 try:
     import cupy as cp
     HAS_CUPY = True

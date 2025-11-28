@@ -140,7 +140,11 @@ class GridState:
     
     def clone(self) -> 'GridState':
         """Create a deep copy of this state."""
-        return GridState(self._positions, self.width, self.height)
+        return GridState(self._positions.copy(), self.width, self.height)
+    
+    def copy(self) -> 'GridState':
+        """Alias for clone() for backward compatibility."""
+        return self.clone()
     
     def __repr__(self):
         bbox_min, bbox_max = self.get_bounding_box()

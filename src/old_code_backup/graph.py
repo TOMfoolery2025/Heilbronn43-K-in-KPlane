@@ -117,6 +117,10 @@ class GridState:
         self._positions[node_id] = new_pos
         self._location_to_node[new_pos] = node_id
     
+    def set_position(self, node_id: int, new_pos: Point):
+        """Alias for move_node() for backward compatibility."""
+        self.move_node(node_id, new_pos)
+    
     def is_occupied(self, pos: Point) -> bool:
         """Check if a position is occupied by a node."""
         return pos in self._location_to_node
@@ -140,7 +144,11 @@ class GridState:
     
     def clone(self) -> 'GridState':
         """Create a deep copy of this state."""
-        return GridState(self._positions, self.width, self.height)
+        return GridState(self._positions.copy(), self.width, self.height)
+    
+    def copy(self) -> 'GridState':
+        """Alias for clone() for backward compatibility."""
+        return self.clone()
     
     def __repr__(self):
         bbox_min, bbox_max = self.get_bounding_box()
