@@ -11,6 +11,7 @@ from solver_strategy import SolverFactory
 # 導入策略實現以註冊它們
 import solver_legacy_strategy
 import solver_new_strategy
+import solver_numba_strategy
 
 def test_instance(instance_path, strategy_name, iterations=1000):
     """
@@ -77,7 +78,7 @@ def main():
         # ('625-nodes.json', 625, 3000),  # 可選：非常大的實例
     ]
     
-    strategies = ['legacy', 'new']
+    strategies = ['numba', 'legacy']  # 只測試快的策略
     
     print_separator()
     print(f"{'LARGE INSTANCE TESTING':^100}")
