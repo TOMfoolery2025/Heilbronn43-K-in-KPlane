@@ -1,0 +1,71 @@
+cmake_minimum_required(VERSION 3.18)
+
+# Declare project with only CXX first
+project(planar_cuda LANGUAGES CXX)
+
+# Set C++ standard
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# Find CUDA Toolkit
+find_package(CUDAToolkit 12.6 REQUIRED)
+
+# Find Python
+find_package(Python COMPONENTS Interpreter Development REQUIRED)
+
+# pybind11
+add_subdirectory(pybind11 EXCLUDE_FROM_ALL)
+
+# Include directories
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CUDAToolkit_INCLUDE_DIRS}
+)
+
+# Manually compile CUDA sources
+set(CUDA_NVCC_EXECUTABLE "${CUDAToolkit_NVCC_EXECUTABLE}")
+set(CUDA_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/cuda_utils/vector_ops.cu
+)
+
+# Custom command to compile .cu files
+set(CUDA_OBJECTS "")
+foreach(cu_file ${CUDA_SOURCES})
+    get_filename_component(cu_name ${cu_file} NAME_WE)
+    set(obj_file "${CMAKE_CURRENT_BINARY_DIR}/${cu_name}.obj")
+    add_custom_command(
+        OUTPUT ${obj_file}
+        COMMAND ${CUDA_NVCC_EXECUTABLE}
+            -c ${cu_file}
+            -o ${obj_file}
+            --compiler-options /MD
+            -arch=sm_89
+            --std=c++17
+            -I"${CMAKE_CURRENT_SOURCE_DIR}/src"
+            -I"${CUDAToolkit_INCLUDE_DIRS}"
+        DEPENDS ${cu_file}
+        COMMENT "Compiling CUDA source ${cu_name}.cu"
+    )
+    list(APPEND CUDA_OBJECTS ${obj_file})
+endforeach()
+
+# Create Python module
+pybind11_add_module(planar_cuda
+    src/cpp_binding/binding.cpp
+    ${CUDA_OBJECTS}
+)
+
+# Link CUDA libraries
+target_link_libraries(planar_cuda PRIVATE CUDA::cudart)
+
+# Set output directory
+set_target_properties(planar_cuda PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+# Windows-specific: ensure correct CUDA DLL paths
+if(WIN32)
+    set_target_properties(planar_cuda PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+endif()

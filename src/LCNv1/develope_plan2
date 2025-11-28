@@ -1,0 +1,190 @@
+這是一個非常明智的決定。
+
+在 Graph Drawing 或物理模擬中，Python 非常適合作為**膠水語言 (Glue Language)** 來處理資料輸入、參數配置與視覺化，但它的直譯特性在 $O(N^2)$ 或 $O(N \log N)$ 的緊密迴圈 (Tight Loop) 中會成為巨大瓶頸。
+
+將計算核心下放給 **CUDA (.cu)**，並透過 C++ 封裝層暴露給 Python，是高效能運算 (HPC) 的標準架構（類似 PyTorch 或 TensorFlow 的底層實作方式）。
+
+以下是採用 **Hybrid Python + CUDA** 架構的開發規劃指南：
+
+---
+
+### 一、 系統架構：Python Frontend + CUDA Backend
+
+我們將系統切分為三層：
+
+1.  **Python Layer (前端/控制層):**
+    *   負責讀取 `.json`。
+    *   負責單元測試 (pytest)。
+    *   負責呼叫 C++ 模組並接收最終座標。
+    *   工具：`Python 3.10+`, `pytest`。
+
+2.  **C++ Binding Layer (介面層):**
+    *   作為 Python 與 GPU 之間的橋樑。
+    *   管理 GPU 記憶體 (allocation/free)。
+    *   工具：**`pybind11`** (推薦) 或 `NanoBind`。這讓你的 C++ 類別可以直接在 Python 中被 `import`。
+
+3.  **CUDA Layer (運算核心層):**
+    *   實作幾何核心 (`__device__` functions)。
+    *   實作 Spatial Hashing 與並行交叉檢測 (`__global__` kernels)。
+    *   工具：`NVCC`, `Thrust` (CUDA 的 STL 替代品), `CUDA C++`。
+
+---
+
+### 二、 核心物件的職責轉移 (OOA Re-evaluation)
+
+在純 Python 版中，物件持有數據；在混合架構中，Python 物件只是持有 C++ 物件的指標 (Handle)。
+
+| 組件 | Python 職責 | C++ / CUDA 職責 |
+| :--- | :--- | :--- |
+| **Graph** | 解析 JSON，傳遞節點與邊的 List 給 C++ | `struct GraphData` (Device Memory)。使用 `thrust::device_vector` 儲存座標與邊。 |
+| **Geometry** | **移除** (只剩測試驗證用) | `__device__` 函數：`cross_product`, `check_intersection`。 |
+| **Grid** | **移除** | `Kernel Launch`：並行計算哪些邊落在哪個 Grid Cell。 |
+| **Energy** | 接收目前 Energy 數值 (用於繪圖) | `Reduction Kernel`：並行加總所有邊的交叉懲罰。 |
+| **Solver** | 呼叫 `solver.step(1000)` 或 `solver.solve()` | 實作 SA 的核心迴圈 (為了效能，SA 的 Loop 最好也在 C++ 跑)。 |
+
+---
+
+### 三、 開發環境準備
+
+你需要一個 `setup.py` 或 `CMakeLists.txt` 來編譯 `.cu` 檔並生成 `.so` (Linux) 或 `.pyd` (Windows) 供 Python 匯入。
+
+**推薦結構：**
+```text
+project/
+├── src/
+│   ├── cuda/
+│   │   ├── geometry.cuh       # __device__ helper functions
+│   │   ├── spatial_grid.cu    # Grid kernels
+│   │   └── solver_kernel.cu   # SA implementation
+│   ├── cpp_binding/
+│   │   └── binding.cpp        # pybind11 code
+│   └── python/
+│       └── visualizer.py
+├── tests/
+│   └── test_core.py           # Python 呼叫 CUDA 進行測試
+├── CMakeLists.txt             # 編譯腳本
+└── main.py
+```
+
+---
+
+### 四、 開發步驟 (Step-by-Step with TDD)
+
+#### Phase 1: 建立 Pybind11 + CUDA 骨架
+**目標：** 讓 Python 能呼叫一個 CUDA 寫的 "Hello World" (例如向量相加)。
+
+1.  **撰寫 C++ (`example.cu`)**: 寫一個簡單的 `add_arrays` kernel。
+2.  **撰寫 Binding (`binding.cpp`)**: 使用 `PYBIND11_MODULE` 暴露該函數。
+3.  **撰寫 Python Test**:
+    ```python
+    import my_cuda_module
+    def test_cuda_add():
+        res = my_cuda_module.add([1, 2], [3, 4])
+        assert res == [4, 6]
+    ```
+4.  **編譯並測試**: 確保 pipeline 通暢。
+
+#### Phase 2: 幾何核心移植 (Geometry Kernel)
+**目標：** 驗證 GPU 算的交叉跟 CPU 算的一樣。
+
+1.  **定義 C++ Struct**:
+    ```cpp
+    struct Point { int x, y; };
+    struct Edge { int u, v; };
+    ```
+2.  **撰寫 CUDA Device Function**:
+    *   移植 `cross_product` 和 `segments_intersect` 到 `geometry.cuh`，加上 `__device__` 修飾詞。
+3.  **撰寫 Kernel**:
+    *   `count_crossings_kernel`: 每個 Thread 檢查一對邊，計算是否交叉。
+4.  **Python TDD**:
+    *   讀取 `sol-15-nodes...json`。
+    *   傳送座標給 C++ 模組。
+    *   呼叫 `module.count_all_crossings()`。
+    *   **Assert:** 結果必須 <= 5 (跟 Python 原型結果一致)。
+
+#### Phase 3: 資料結構轉移 (Data on Device)
+**目標：** 避免每次計算都從 Python 傳 List 到 GPU (PCIe 太慢)。
+
+1.  **C++ Class `CudaGraph`**:
+    *   在 Constructor 中使用 `cudaMalloc` 或 `thrust::device_vector` 配置記憶體。
+    *   提供 `update_node_pos(node_id, x, y)` 方法。
+2.  **Binding**:
+    *   暴露 `CudaGraph` 類別給 Python。
+    *   Python 初始化時：`graph = CudaGraph(nodes_list, edges_list)` (資料只傳這一次)。
+
+#### Phase 4: 模擬退火核心 (The SA Loop)
+**關鍵決策：** 為了極致效能，**不要**在 Python 寫 `for i in range(10000)` 然後每次呼叫 C++。Python 呼叫 C++ 有微小的 overhead，累積起來很可觀。
+**正確做法：** 將整個 SA Loop 寫在 C++ 裡，Python 只呼叫 `solve(steps=10000, temp=100)`。
+
+1.  **C++ 實作 SA**:
+    *   在 C++ 端實作冷卻循環。
+    *   每次迭代：
+        1.  CPU (C++ Host) 決定 Move (Shift/Swap)。
+        2.  呼叫 CUDA Kernel 計算 $\Delta E$ (只計算受影響的邊)。
+        3.  根據 Metropolis 準則決定是否接受。
+        4.  若接受，更新 Device Memory 中的座標。
+2.  **Python TDD**:
+    *   `graph.solve(steps=50000)`。
+    *   `pos = graph.get_positions()`。
+    *   驗證最終 `pos` 的交叉數。
+
+---
+
+### 五、 CUDA 特定的實作細節範例
+
+這是一個簡單的 `binding.cpp` 概念範例，讓你有感覺怎麼寫：
+
+```cpp
+#include <pybind11/pybind11.h>
+#include <pybind11/stl.h>
+#include "gpu_solver.h" // 你的 CUDA header
+
+namespace py = pybind11;
+
+// 這是在 Python 中會看到的類別
+class PySolver {
+    GPUSolver* solver; // 指向實際 CUDA 實體的指標
+
+public:
+    PySolver(std::vector<std::pair<int, int>> nodes, 
+             std::vector<std::pair<int, int>> edges) {
+        // 資料從 Python list 轉成 C++ vector，再傳進 CUDA 記憶體
+        solver = new GPUSolver(nodes, edges);
+    }
+
+    ~PySolver() { delete solver; }
+
+    void run_annealing(int steps, float initial_temp) {
+        // 這個函數會跑很久，這段時間 Python 會 blocked
+        solver->run(steps, initial_temp);
+    }
+
+    std::vector<std::pair<int, int>> get_layout() {
+        return solver->download_results();
+    }
+    
+    int get_current_energy() {
+        return solver->calculate_full_energy();
+    }
+};
+
+PYBIND11_MODULE(planar_cuda, m) {
+    py::class_<PySolver>(m, "PlanarSolver")
+        .def(py::init<std::vector<std::pair<int, int>>, std::vector<std::pair<int, int>>>())
+        .def("run_annealing", &PySolver::run_annealing)
+        .def("get_layout", &PySolver::get_layout)
+        .def("get_energy", &PySolver::get_current_energy);
+}
+```
+
+### 六、 這樣開發的好處
+
+1.  **測試與算法分離：** 你可以用 Python 寫非常複雜的測試案例 (Test Cases)，而不用在 C++ 裡寫痛苦的 Unit Test。
+2.  **可視化：** 開發過程中，可以讓 C++ 每跑 1000 次迭代就回傳一次座標，Python 用 Matplotlib 即時畫圖，看圖形怎麼「解開」。
+3.  **效能：** $\Delta E$ 的計算在 GPU 上可以平行化 (檢查一條邊 vs 其他候選邊)，這比 CPU 快上數百倍。
+
+### 總結你的 Action Item
+
+1.  安裝 **CUDA Toolkit**。
+2.  安裝 **pybind11** (`pip install pybind11`).
+3.  先不要管演算法，**先打通 Python -> C++ -> CUDA 的編譯流程**。這是最大的門檻，一旦跨過，後面就是移植邏輯而已。
