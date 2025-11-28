@@ -317,6 +317,6 @@ class CUDASolverStrategy(ISolverStrategy):
 # 註冊策略
 if HAS_CUDA:
     SolverFactory.register_strategy('cuda', CUDASolverStrategy)
-    print("✅ CUDA solver strategy registered")
+    print("[OK] CUDA solver strategy registered")
 else:
     print("⚠️ CUDA solver strategy not available (no GPU)")

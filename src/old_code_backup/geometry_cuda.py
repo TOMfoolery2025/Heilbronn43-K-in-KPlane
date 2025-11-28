@@ -141,7 +141,7 @@ class CUDAGeometryCore:
             try:
                 # 編譯 CUDA kernels
                 self._compile_kernels()
-                print("✅ CUDA kernels compiled successfully")
+                print("[OK] CUDA kernels compiled successfully")
             except Exception as e:
                 print(f"⚠️ CUDA compilation failed: {e}")
                 self.use_gpu = False
