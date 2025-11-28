@@ -94,64 +94,74 @@ class SimulatedAnnealingSolver:
         if nodes_x is None: nodes_x = self.nodes_x
         if nodes_y is None: nodes_y = self.nodes_y
         
-        # Crossings
+        # 1. Crossings
         if nodes_x is not self.nodes_x or nodes_y is not self.nodes_y:
              _, k, total = count_crossings(nodes_x, nodes_y, self.edges_source, self.edges_target)
-             crossing_energy = k * 1000 + total
         else:
              k = np.max(self.edge_crossings) if self.num_edges > 0 else 0
              total = np.sum(self.edge_crossings) // 2
-             crossing_energy = k * 1000 + total
              
-        # Repulsion (O(N^2) full scan, but we usually use incremental)
-        # For full energy calc, we do full scan
-        # Vectorized distance matrix
-        # (N, 1, 2) - (1, N, 2)
+        # Dynamic K Weight: Ensure it dominates spring/repulsion
+        k_weight = max(10000, self.width * 0.1)
+        crossing_energy = k * k_weight + total
+             
+        # 2. Repulsion (Dynamic Radius)
+        # Radius = 15% of width
+        radius = self.width * 0.15
+        
         coords = np.stack([nodes_x, nodes_y], axis=1)
         diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
         dists = np.sqrt(np.sum(diff**2, axis=-1))
-        # Mask diagonal
         np.fill_diagonal(dists, np.inf)
         
-        repulsion_mask = dists < 500
-        repulsion_vals = 500 - dists
-        repulsion_energy = np.sum(repulsion_vals[repulsion_mask]) / 2 # Divide by 2 because (i,j) and (j,i) counted
+        repulsion_mask = dists < radius
+        # Penalty: (Radius - dist)
+        repulsion_vals = radius - dists
+        repulsion_energy = np.sum(repulsion_vals[repulsion_mask]) / 2 
         
-        # Spreading (Distance from center)
-        # We want to MAXIMIZE distance from center. So minimize -distance.
-        center_x, center_y = self.width / 2, self.height / 2
-        dist_from_center = np.sqrt((nodes_x - center_x)**2 + (nodes_y - center_y)**2)
-        # Weighting: make it significant but less than crossings
-        # Max dist is approx 700,000. 
-        # We want spreading to break clusters.
-        spreading_energy = -np.sum(dist_from_center) * 0.01
+        # 3. Spring Attraction (Edge Lengths)
+        u_x = nodes_x[self.edges_source]
+        u_y = nodes_y[self.edges_source]
+        v_x = nodes_x[self.edges_target]
+        v_y = nodes_y[self.edges_target]
         
-        return crossing_energy + repulsion_energy + spreading_energy
+        edge_lengths = np.sqrt((u_x - v_x)**2 + (u_y - v_y)**2)
+        spring_energy = np.sum(edge_lengths) * 0.05
+        
+        return crossing_energy + repulsion_energy + spring_energy
 
     def solve(self, iterations=1000, temp=10.0, cooling_rate=0.995):
-        # Initial Energy Components
+        # Constants
+        radius = self.width * 0.15
+        k_weight = max(10000, self.width * 0.1)
+        
+        # Initial State
         current_x = self.nodes_x.copy()
         current_y = self.nodes_y.copy()
         
-        # Calculate initial components separately to track them incrementally
+        # Initial Components
         # Crossings
         current_k = np.max(self.edge_crossings) if self.num_edges > 0 else 0
         current_total_crossings = np.sum(self.edge_crossings) // 2
-        current_crossing_energy = current_k * 1000 + current_total_crossings
+        current_crossing_energy = current_k * k_weight + current_total_crossings
         
-        # Repulsion & Spreading (Full calc once)
+        # Repulsion
         coords = np.stack([current_x, current_y], axis=1)
         diff = coords[:, np.newaxis, :] - coords[np.newaxis, :, :]
         dists = np.sqrt(np.sum(diff**2, axis=-1))
         np.fill_diagonal(dists, np.inf)
-        rep_mask = dists < 500
-        current_repulsion_energy = np.sum((500 - dists)[rep_mask]) / 2
+        rep_mask = dists < radius
+        current_repulsion_energy = np.sum((radius - dists)[rep_mask]) / 2
         
-        center_x, center_y = self.width / 2, self.height / 2
-        d_center = np.sqrt((current_x - center_x)**2 + (current_y - center_y)**2)
-        current_spreading_energy = -np.sum(d_center) * 0.01
+        # Spring
+        u_x = current_x[self.edges_source]
+        u_y = current_y[self.edges_source]
+        v_x = current_x[self.edges_target]
+        v_y = current_y[self.edges_target]
+        edge_lengths = np.sqrt((u_x - v_x)**2 + (u_y - v_y)**2)
+        current_spring_energy = np.sum(edge_lengths) * 0.05
         
-        current_total_energy = current_crossing_energy + current_repulsion_energy + current_spreading_energy
+        current_total_energy = current_crossing_energy + current_repulsion_energy + current_spring_energy
         
         best_x = current_x.copy()
         best_y = current_y.copy()
@@ -176,34 +186,41 @@ class SimulatedAnnealingSolver:
             # --- Incremental Updates ---
             
             # 1. Repulsion Delta (O(N))
-            # Remove old contribution of node_idx
             d_old = np.sqrt((self.nodes_x - old_x)**2 + (self.nodes_y - old_y)**2)
-            # Ignore self (dist 0)
             d_old[node_idx] = np.inf 
-            rep_old = np.sum(500 - d_old[d_old < 500])
+            rep_old = np.sum(radius - d_old[d_old < radius])
             
-            # Add new contribution
             d_new = np.sqrt((self.nodes_x - new_x)**2 + (self.nodes_y - new_y)**2)
             d_new[node_idx] = np.inf
-            rep_new = np.sum(500 - d_new[d_new < 500])
+            rep_new = np.sum(radius - d_new[d_new < radius])
             
             delta_repulsion = rep_new - rep_old
             
-            # 2. Spreading Delta (O(1))
-            d_c_old = math.sqrt((old_x - center_x)**2 + (old_y - center_y)**2)
-            d_c_new = math.sqrt((new_x - center_x)**2 + (new_y - center_y)**2)
-            delta_spreading = -(d_c_new - d_c_old) * 0.01
+            # 2. Spring Delta (O(d))
+            incident_edge_indices = self.node_to_edges[node_idx]
+            delta_spring = 0
+            
+            if incident_edge_indices:
+                incident_indices = np.array(incident_edge_indices, dtype=np.int32)
+                e_src = self.edges_source[incident_indices]
+                e_tgt = self.edges_target[incident_indices]
+                
+                is_source = (e_src == node_idx)
+                neighbor_indices = np.where(is_source, e_tgt, e_src)
+                
+                nbr_x = self.nodes_x[neighbor_indices]
+                nbr_y = self.nodes_y[neighbor_indices]
+                
+                l_old = np.sqrt((old_x - nbr_x)**2 + (old_y - nbr_y)**2)
+                l_new = np.sqrt((new_x - nbr_x)**2 + (new_y - nbr_y)**2)
+                
+                delta_spring = np.sum(l_new - l_old) * 0.05
             
             # 3. Crossing Delta (O(d*E))
-            incident_indices = self.node_to_edges[node_idx]
-            
-            # If no edges, crossing delta is 0
-            if not incident_indices:
+            if not incident_edge_indices:
                 delta_crossing_energy = 0
                 temp_crossings = self.edge_crossings # No change
             else:
-                incident_indices = np.array(incident_indices, dtype=np.int32)
-                
                 # Helper to find intersections (Local)
                 def get_intersections(indices, x, y):
                     t_src = self.edges_source[indices]
@@ -245,7 +262,7 @@ class SimulatedAnnealingSolver:
                 # NEW STATE
                 new_mat = get_intersections(incident_indices, self.nodes_x, self.nodes_y)
                 
-                # Revert for now (we apply later if accepted)
+                # Revert for now
                 self.nodes_x[node_idx] = old_x
                 self.nodes_y[node_idx] = old_y
                 
@@ -264,12 +281,12 @@ class SimulatedAnnealingSolver:
                 
                 new_k = np.max(temp_crossings) if self.num_edges > 0 else 0
                 new_total = np.sum(temp_crossings) // 2
-                new_crossing_energy = new_k * 1000 + new_total
+                new_crossing_energy = new_k * k_weight + new_total
                 
                 delta_crossing_energy = new_crossing_energy - current_crossing_energy
 
             # Total Energy Change
-            total_delta = delta_crossing_energy + delta_repulsion + delta_spreading
+            total_delta = delta_crossing_energy + delta_repulsion + delta_spring
             new_energy_val = current_total_energy + total_delta
             
             # Metropolis
@@ -286,7 +303,7 @@ class SimulatedAnnealingSolver:
                 current_total_energy = new_energy_val
                 current_crossing_energy += delta_crossing_energy
                 current_repulsion_energy += delta_repulsion
-                current_spreading_energy += delta_spreading
+                current_spring_energy += delta_spring
                 
                 self.nodes_x[node_idx] = new_x
                 self.nodes_y[node_idx] = new_y
@@ -299,7 +316,7 @@ class SimulatedAnnealingSolver:
                     best_x = self.nodes_x.copy()
                     best_y = self.nodes_y.copy()
             else:
-                # Reject (Nothing to revert in self.nodes_x/y as we reverted above)
+                # Reject
                 steps_since_improvement += 1
                 
             # Re-heat Logic
