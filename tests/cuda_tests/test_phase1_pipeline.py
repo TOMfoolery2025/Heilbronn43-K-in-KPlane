@@ -18,8 +18,10 @@ from pathlib import Path
 # Add CUDA DLL directory
 os.add_dll_directory(r'C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.6\bin')
 
-# Add project root to path
+# Add project root and build_artifacts to path
 project_root = Path(__file__).parent.parent.parent
+build_artifacts = project_root / "build_artifacts"
+sys.path.insert(0, str(build_artifacts))
 sys.path.insert(0, str(project_root))
 
 
