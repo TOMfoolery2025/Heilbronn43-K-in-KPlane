@@ -1,0 +1,211 @@
+
+接下來的移植與開發，我們將採用 **「核心下沈，控制上浮」** 的策略。
+
+以下是基於 **OOA/OOD** 與 **TDD** 的完整開發規劃，專門針對 Hybrid (Python + CUDA) 架構。
+
+---
+
+### Phase 1: OOA 物件導向分析 (Hybrid Architecture Analysis)
+
+在混合架構中，物件的邊界不再只是邏輯邊界，更是**記憶體邊界 (Memory Boundary)**。
+
+1.  **實體 (Entities) 與 記憶體駐在地:**
+    *   **`GraphTopology` (唯讀, GPU):** 節點連接關係 (Edge List)。一旦載入 GPU 後就不會變動。
+    *   **`GraphState` (讀寫, GPU):** 節點目前的座標 $(x, y)$。這是主要變動的資料。
+    *   **`GeometryEngine` (無狀態, GPU Kernel):** 負責並行計算交叉判定的邏輯。
+    *   **`SolverController` (控制, CPU/C++):** 負責亂數生成、決定 Move、呼叫 GPU 計算能量、決定是否接受。
+    *   **`PyInterface` (介面, Python):** 負責測試驅動、資料注入、結果驗證。
+
+2.  **關鍵行為 (Key Behaviors):**
+    *   **Batch Evaluation:** 不再是一次算一個，而是 GPU 一次並行計算數千條邊的交叉狀況。
+    *   **Minimal Data Transfer:** 只有在初始化 (Init) 和最終結果 (Result) 時才透過 PCIe 傳輸資料。中間的優化過程資料全部留在 VRAM。
+
+---
+
+### Phase 2: OOD 物件導向設計 (C++ & CUDA Class Design)
+
+我們需要在 C++ 層設計類別，並透過 pybind11 暴露給 Python。
+
+#### 1. C++ 類別設計 (`planar_cuda.h`)
+
+```cpp
+// 這是我們將暴露給 Python 的主要介面
+class PlanarSolver {
+private:
+    // Device Memory Pointers (GPU 記憶體指標)
+    int* d_nodes_x;
+    int* d_nodes_y;
+    int2* d_edges; // int2 是 CUDA 內建型別 (u, v)
+    int num_nodes;
+    int num_edges;
+
+    // Spatial Grid 相關參數
+    int* d_grid_cells; // Flattened Grid
+    
+public:
+    // 建構子：負責 cudaMalloc 和 cudaMemcpy (Host -> Device)
+    PlanarSolver(std::vector<int> x, std::vector<int> y, std::vector<std::pair<int,int>> edges);
+    
+    // 解構子：負責 cudaFree
+    ~PlanarSolver();
+
+    // 核心功能 1: 計算全圖交叉數 (用於驗證)
+    long long calculate_total_crossings();
+
+    // 核心功能 2: 執行模擬退火 (SA)
+    // 這是最關鍵的 Loop，完全在 C++ 跑，不回傳給 Python
+    void run_optimization(int iterations, float start_temp, float cooling_rate);
+
+    // 取回資料：負責 cudaMemcpy (Device -> Host)
+    std::pair<std::vector<int>, std::vector<int>> get_coordinates();
+};
+```
+
+#### 2. CUDA Kernels 設計 (`kernels.cu`)
+
+這不是類別，而是 `__global__` 函數。
+
+*   `kernel_count_crossings(...)`: 每個 Thread 負責一條邊，去檢查它是否與其他邊交叉。
+*   `kernel_update_spatial_hash(...)`: 重建網格索引。
+
+---
+
+### Phase 3: TDD 開發路徑 (Implementation Cycles)
+
+我們會經歷三個循環。請嚴格遵守 **Python 寫測試 (Red) -> C++/CUDA 寫實作 (Green)** 的流程。
+
+#### Cycle 1: 幾何真理 (Geometry on GPU)
+**目標：** 確保 GPU 算的交叉數跟 CPU 算的一模一樣。
+
+1.  **Python Test (Red):**
+    ```python
+    # tests/test_gpu_geometry.py
+    import planar_cuda
+    import json
+    
+    def test_gpu_crossing_accuracy():
+        # 載入我們熟悉的 15-nodes.json
+        with open('data/15-nodes.json') as f:
+            data = json.load(f)
+        
+        # 準備資料
+        nodes_x = [n['x'] for n in data['nodes']]
+        nodes_y = [n['y'] for n in data['nodes']]
+        edges = [(e['source'], e['target']) for e in data['edges']]
+        
+        # 初始化 C++ Solver
+        solver = planar_cuda.PlanarSolver(nodes_x, nodes_y, edges)
+        
+        # 計算交叉數
+        gpu_crossings = solver.calculate_total_crossings()
+        
+        # 這裡填入你之前 Python 版算出的正確數值 (假設是 25)
+        # 或者在測試中用 Python Brute Force 算一次來比對
+        expected_crossings = 25 
+        assert gpu_crossings == expected_crossings
+    ```
+
+2.  **C++/CUDA Implementation (Green):**
+    *   實作 `PlanarSolver` 建構子 (記憶體配置)。
+    *   實作 `calculate_total_crossings` 呼叫 CUDA Kernel。
+    *   實作 `kernel_count_crossings` (移植 `segments_intersect` 邏輯)。
+    *   **注意：** 這裡先用 $O(E^2)$ 的暴力法 (每個 Thread 跑迴圈檢查所有邊)，先求正確，Cycle 2 再做優化。
+
+#### Cycle 2: 狀態更新與資料回傳 (State Management)
+**目標：** 確保我們可以修改座標並取回。
+
+1.  **Python Test (Red):**
+    ```python
+    def test_coordinate_update():
+        # 初始化一個三角形 (0,0), (10,0), (0,10)
+        solver = planar_cuda.PlanarSolver([0, 10, 0], [0, 0, 10], [(0,1), (1,2), (2,0)])
+        
+        # 執行一個 "空" 的優化 (0 iterations)，但確保資料傳輸路徑通暢
+        solver.run_optimization(0, 100, 0.99)
+        
+        # 取回座標
+        xs, ys = solver.get_coordinates()
+        assert xs == [0, 10, 0] # 確保資料沒壞
+    ```
+
+2.  **C++/CUDA Implementation (Green):**
+    *   實作 `get_coordinates` (Device 到 Host 的記憶體拷貝)。
+    *   實作 `run_optimization` 的空殼。
+
+#### Cycle 3: 模擬退火核心 (The Optimizer)
+**目標：** 將 SA Loop 移入 C++。
+
+1.  **Python Test (Red):**
+    ```python
+    def test_optimization_convergence():
+        # 載入高能量狀態 (15-nodes.json)
+        # ... load logic ...
+        solver = planar_cuda.PlanarSolver(nodes_x, nodes_y, edges)
+        
+        initial_k = solver.calculate_total_crossings()
+        
+        # 執行優化 (在 C++ 端跑 50000 次迭代)
+        solver.run_optimization(50000, 100.0, 0.95)
+        
+        final_k = solver.calculate_total_crossings()
+        
+        print(f"Init: {initial_k}, Final: {final_k}")
+        assert final_k < initial_k # 必須有優化效果
+        assert final_k <= 5        # 期望達到最佳解
+    ```
+
+2.  **C++/CUDA Implementation (Green):**
+    *   在 `run_optimization` 中實作 `for` 迴圈。
+    *   **Host Code (C++):**
+        *   隨機選一個 Node $v$。
+        *   隨機選一個新位置 $(x', y')$。
+    *   **Kernel Call:**
+        *   計算 $\Delta E$ (只計算與 Node $v$ 相連的邊)。
+    *   **Decision:**
+        *   若 $\Delta E < 0$ 或 `rand() < exp(...)`: 接受移動 (更新 Device Memory)。
+        *   否則: 保持原狀。
+
+---
+
+### Phase 4: 開發 Prompt (給 AI 執行)
+
+你可以用這個 Prompt 讓 AI 開始寫 CUDA Code。
+
+```markdown
+# Role
+You are a CUDA/C++ Performance Engineer. We are porting a Python Graph Drawing algorithm to CUDA using `pybind11`.
+
+# Architecture
+- **Host (Python):** Handles tests and data loading.
+- **Wrapper (C++):** `PlanarSolver` class manages memory and pybind11 interface.
+- **Device (CUDA):** Kernels for integer-based geometric intersection.
+
+# Current Task: Cycle 1 - Geometry Verification
+We need to implement the C++ class and a basic CUDA kernel to count crossings.
+
+## Requirements
+1. **Input:** Arrays of x, y, and edge pairs (u, v).
+2. **Logic:** Implement strictly INTEGER arithmetic for `segments_intersect`.
+   - Use Cross Product method.
+   - Handle simple intersection logic first (O(E^2) is fine for now, we optimize later).
+3. **Output:** `calculate_total_crossings()` should return the total count.
+
+## File Structure
+- `src/planar_cuda.cu`: Contains both C++ class and CUDA kernels.
+- `CMakeLists.txt`: For compiling with pybind11 and nvcc.
+
+## Reference Geometry Logic (Python version)
+(Paste your Python geometry logic here if needed, or ask me to provide the logic)
+
+# Action
+Please write the `planar_cuda.cu` file and the `CMakeLists.txt` to implement Cycle 1.
+I will then compile it and run my Python test `test_gpu_geometry.py` against it.
+```
+
+### 給你的建議
+
+1.  **不要過早優化 (Premature Optimization):** 在 Cycle 1 和 Cycle 3 初與期，直接在 GPU 裡面寫 `for (int i=0; i<num_edges; i++)` 這種 $O(N)$ 的檢查是可以的。GPU 的平行度很高，即使是暴力法也會比 Python 快。
+2.  **先跑通，再 Spatial Hash:** 等到你的 `test_optimization_convergence` 能通過但速度不夠快時，再來實作 Spatial Grid 加速結構。
+3.  **除錯:** 寫 CUDA 最怕記憶體錯誤。如果在 Python 裡遇到 `Segmentation Fault`，通常是 C++ 端的 `cudaMemcpy` 寫錯了。
+
+現在，請嘗試將上面的 "Cycle 1" Prompt 丟給 AI，開始你的 CUDA 之旅吧！
