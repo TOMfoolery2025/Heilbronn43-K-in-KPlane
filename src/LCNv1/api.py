@@ -31,6 +31,8 @@ class OptimizationResult:
     k: int
     total_crossings: int
     iterations: int
+    nodes: list = None  # Added to support returning positions
+    edge_crossings: list = None # Added to support red edge indicators
     acceptance_rate: float = 0.0
     time: float = 0.0
     initial_energy: float = 0.0
@@ -179,11 +181,14 @@ class LCNSolver:
         )
         
         # 構建結果對象
+        # 構建結果對象
         return OptimizationResult(
             energy=result['energy'],
             k=result['k'],
             total_crossings=result['total_crossings'],
             iterations=result.get('iterations', iterations),
+            nodes=result.get('nodes'),  # Pass updated nodes
+            edge_crossings=result.get('edge_crossings'), # Pass edge crossings
             acceptance_rate=result.get('acceptance_rate', 0.0),
             time=result.get('time', 0.0),
             initial_energy=self._initial_stats['energy'] if self._initial_stats else 0.0,

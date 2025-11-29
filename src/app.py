@@ -7,12 +7,34 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 import numpy as np
 import threading
 import time
+import sys
+import os
+
+# Robust path setup
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(current_dir)
+
+# Add project root to sys.path so we can do 'from src.solver import ...'
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Add current dir to sys.path so we can do 'import solver' if needed
+if current_dir not in sys.path:
+    sys.path.insert(0, current_dir)
+
 try:
-    from scorer import count_crossings
-    from solver import SimulatedAnnealingSolver
+    from src.solver import SimulatedAnnealingSolver
+    from src.LCNv1.api import LCNSolver, StrategyType
 except ImportError:
-    from scorer import count_crossings
-    from solver import SimulatedAnnealingSolver
+    try:
+        from solver import SimulatedAnnealingSolver
+        from LCNv1.api import LCNSolver, StrategyType
+    except ImportError as e:
+        print(f"Import Error: {e}")
+        # If running from src directly, LCNv1 might be tricky
+        sys.path.append(os.path.join(current_dir, 'LCNv1'))
+        from solver import SimulatedAnnealingSolver
+        from api import LCNSolver, StrategyType
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("blue")
@@ -22,6 +44,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title("K-Planar Graph Minimizer")
         self.geometry("1200x800")
+        self.closing = False # Flag to track closing state
         
         # Data
         self.nodes = []
@@ -54,6 +77,18 @@ class App(ctk.CTk):
         self.entry_filter.bind("<Return>", self.search_node)
         self.btn_search = ctk.CTkButton(self.sidebar, text="Search", command=self.search_node)
         self.btn_search.pack(pady=5, padx=20)
+        
+        # Strategy Selection
+        self.strategy_label = ctk.CTkLabel(self.sidebar, text="Solver Strategy")
+        self.strategy_label.pack(pady=(10, 0))
+        
+        self.strategy_var = ctk.StringVar(value="legacy")
+        self.strategy_menu = ctk.CTkOptionMenu(
+            self.sidebar,
+            variable=self.strategy_var,
+            values=["legacy", "new", "numba", "cuda"]
+        )
+        self.strategy_menu.pack(pady=(0, 10))
         
         self.btn_optimize = ctk.CTkButton(self.sidebar, text="Run Optimizer", command=self.toggle_optimizer)
         self.btn_optimize.pack(pady=20, padx=20)
@@ -112,7 +147,7 @@ class App(ctk.CTk):
             pass
 
     def update_plot(self, compute_stats=True):
-        if not self.winfo_exists(): return
+        if self.closing or not self.winfo_exists(): return
         
         # Save current view limits to preserve zoom/pan state
         xlim = self.ax.get_xlim()
@@ -120,10 +155,26 @@ class App(ctk.CTk):
         
         self.ax.clear()
         
-        # Restore limits
+        # Restore limits or set dynamic limits
         if xlim == (0.0, 1.0) and ylim == (0.0, 1.0):
-             self.ax.set_xlim(0, self.width_bounds)
-             self.ax.set_ylim(0, self.height_bounds)
+             # Dynamic scaling based on content
+             if self.nodes:
+                 xs = [n['x'] for n in self.nodes]
+                 ys = [n['y'] for n in self.nodes]
+                 min_x, max_x = min(xs), max(xs)
+                 min_y, max_y = min(ys), max(ys)
+                 
+                 # Add 10% padding
+                 w = max_x - min_x
+                 h = max_y - min_y
+                 pad_x = max(w * 0.1, 50)
+                 pad_y = max(h * 0.1, 50)
+                 
+                 self.ax.set_xlim(min_x - pad_x, max_x + pad_x)
+                 self.ax.set_ylim(min_y - pad_y, max_y + pad_y)
+             else:
+                 self.ax.set_xlim(0, self.width_bounds)
+                 self.ax.set_ylim(0, self.height_bounds)
         else:
              self.ax.set_xlim(xlim)
              self.ax.set_ylim(ylim)
@@ -140,12 +191,6 @@ class App(ctk.CTk):
         edges_source = np.array([e['source'] for e in self.edges], dtype=np.int32)
         edges_target = np.array([e['target'] for e in self.edges], dtype=np.int32)
         
-        # If called from main thread (e.g. drag/load), we might need to compute
-        # If called from optimizer, we might have pre-computed data
-        # For simplicity, if not optimizing, we compute here.
-        # If optimizing, we use the latest data from the solver thread if available?
-        # Actually, to fix the freeze, we MUST NOT compute here if called from the loop.
-        
         edge_crossings = None
         k = 0
         total = 0
@@ -155,19 +200,21 @@ class App(ctk.CTk):
              k = self.latest_k
              total = self.latest_total
         elif compute_stats:
-             edge_crossings, k, total = count_crossings(nodes_x, nodes_y, edges_source, edges_target)
+             try:
+                 from src.scorer import count_crossings
+                 edge_crossings, k, total = count_crossings(nodes_x, nodes_y, edges_source, edges_target)
+             except ImportError:
+                 from scorer import count_crossings
+                 edge_crossings, k, total = count_crossings(nodes_x, nodes_y, edges_source, edges_target)
         
         # Update Stats
-        if edge_crossings is not None:
-            try:
-                self.lbl_stats.configure(text=f"Stats:\nK: {k}\nTotal: {total}")
-            except Exception:
-                pass # Widget might be destroyed
+        try:
+            self.lbl_stats.configure(text=f"Stats:\nK: {k}\nTotal: {total}")
+        except Exception:
+            pass # Widget might be destroyed
         
         # Draw Edges
         if edge_crossings is not None:
-            # Vectorized color/width assignment would be faster for Matplotlib collections
-            # But for now, let's stick to the loop but handle the case where data is missing
             for i, (u, v) in enumerate(zip(edges_source, edges_target)):
                 x1, y1 = nodes_x[u], nodes_y[u]
                 x2, y2 = nodes_x[v], nodes_y[v]
@@ -179,7 +226,6 @@ class App(ctk.CTk):
                 
                 self.ax.plot([x1, x2], [y1, y2], color=color, linewidth=width, alpha=alpha, zorder=1)
         else:
-            # Fallback if no stats (shouldn't happen usually)
             for i, (u, v) in enumerate(zip(edges_source, edges_target)):
                 x1, y1 = nodes_x[u], nodes_y[u]
                 x2, y2 = nodes_x[v], nodes_y[v]
@@ -225,7 +271,7 @@ class App(ctk.CTk):
         if self.drag_node_idx is not None and event.inaxes == self.ax:
             self.nodes[self.drag_node_idx]['x'] = event.xdata
             self.nodes[self.drag_node_idx]['y'] = event.ydata
-            self.update_plot(compute_stats=True) # Dragging needs live update, usually graph is small enough or we accept lag
+            self.update_plot(compute_stats=True)
 
     def on_release(self, event):
         self.drag_node_idx = None
@@ -241,60 +287,96 @@ class App(ctk.CTk):
             threading.Thread(target=self.run_optimizer_loop, daemon=True).start()
 
     def run_optimizer_loop(self):
-        self.solver = SimulatedAnnealingSolver(self.nodes, self.edges, self.width_bounds, self.height_bounds)
+        # Determine Strategy
+        strategy = self.strategy_var.get()
+        print(f"Starting optimizer with strategy: {strategy}")
         
+        # Save current state to temp file for LCNSolver
+        temp_file = "temp_optimizer_input.json"
+        data = {
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "width": self.width_bounds,
+            "height": self.height_bounds
+        }
+        with open(temp_file, 'w') as f:
+            json.dump(data, f)
+            
+        # Initialize Solver
+        try:
+            self.lcn_solver = LCNSolver(strategy=strategy)
+            self.lcn_solver.load_from_json(temp_file)
+        except Exception as e:
+            print(f"Error initializing solver: {e}")
+            self.running_optimizer = False
+            if self.winfo_exists():
+                self.btn_optimize.configure(text="Run Optimizer")
+            return
+
         # Initial temperature scaling
-        # Start with a significant fraction of the canvas size to allow large moves
         initial_temp = max(self.width_bounds, self.height_bounds) * 0.2
         current_temp = initial_temp
         
-        batch_size = 50 # Run 50 iterations between updates
+        batch_size = 250 # Run 250 iterations between updates
         
         # Cooling rate per STEP (not per batch)
-        # We want to cool down over maybe 10000 steps?
-        # 0.999 per step -> 0.999^10000 ~= 0.000045
-        step_cooling = 0.999
+        cooling_rate = 0.9995 
         
-        while self.running_optimizer:
-            if not self.winfo_exists():
-                self.running_optimizer = False
+        while self.running_optimizer and not self.closing:
+            # Run a batch of iterations
+            try:
+                result = self.lcn_solver.optimize(
+                    iterations=batch_size,
+                    initial_temp=current_temp,
+                    cooling_rate=cooling_rate
+                )
+                
+                # Update App State
+                if result.nodes:
+                    result_nodes_map = {n['id']: n for n in result.nodes}
+                    for node in self.nodes:
+                        nid = node['id']
+                        if nid in result_nodes_map:
+                            node['x'] = result_nodes_map[nid]['x']
+                            node['y'] = result_nodes_map[nid]['y']
+                
+                # Update Stats
+                self.latest_k = result.k
+                self.latest_total = result.total_crossings
+                self.latest_edge_crossings = result.edge_crossings # Get from result
+                
+                # Update Temperature
+                current_temp *= (cooling_rate ** batch_size)
+                
+                # Reheat check
+                if current_temp < 0.1:
+                     current_temp = initial_temp * 0.5 # Reheat
+                     
+                # Update UI
+                if not self.closing and self.winfo_exists():
+                    try:
+                        self.after_id = self.after(0, lambda: self.update_plot(compute_stats=False))
+                    except Exception:
+                        break
+                
+            except Exception as e:
+                print(f"Optimization error: {e}")
                 break
                 
-            # Run a batch
-            best_x, best_y, _, new_temp = self.solver.solve(iterations=batch_size, temp=current_temp, cooling_rate=step_cooling)
-            current_temp = new_temp
+            time.sleep(0.01) # Yield to UI thread
             
-            # Update nodes in app state (thread safe enough for this)
-            for i, n in enumerate(self.nodes):
-                n['x'] = best_x[i]
-                n['y'] = best_y[i]
-            
-            # Compute stats IN BACKGROUND
-            nodes_x = np.array([n['x'] for n in self.nodes], dtype=np.float64)
-            nodes_y = np.array([n['y'] for n in self.nodes], dtype=np.float64)
-            edges_source = np.array([e['source'] for e in self.edges], dtype=np.int32)
-            edges_target = np.array([e['target'] for e in self.edges], dtype=np.int32)
-            
-            edge_crossings, k, total = count_crossings(nodes_x, nodes_y, edges_source, edges_target)
-            
-            self.latest_edge_crossings = edge_crossings
-            self.latest_k = k
-            self.latest_total = total
-            
-            # Schedule UI update (Draw Only)
-            if self.winfo_exists():
-                self.after(0, lambda: self.update_plot(compute_stats=False))
-            
-            # If temp is too low, maybe restart or stop? 
-            # For now just keep running until user stops.
-            # Maybe reheat if stuck?
-            if current_temp < 0.1:
-                 current_temp = initial_temp * 0.5 # Reheat
-            
-            time.sleep(0.05)
+        self.running_optimizer = False
+        if not self.closing and self.winfo_exists():
+            self.btn_optimize.configure(text="Run Optimizer")
 
     def on_closing(self):
+        self.closing = True
         self.running_optimizer = False
+        if hasattr(self, 'after_id'):
+            try:
+                self.after_cancel(self.after_id)
+            except ValueError:
+                pass
         self.quit()
         self.destroy()
 

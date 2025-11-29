@@ -96,7 +96,8 @@ class LegacySolverStrategy(ISolverStrategy):
             },
             'energy': final_energy,
             'k': int(k),
-            'total_crossings': int(total)
+            'total_crossings': int(total),
+            'edge_crossings': self.solver.edge_crossings # Return numpy array
         }
     
     def get_current_stats(self) -> Dict[str, Any]:

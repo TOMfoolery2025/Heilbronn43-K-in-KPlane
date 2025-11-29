@@ -219,7 +219,7 @@ class NumbaSolverStrategy(ISolverStrategy):
             self.power
         )
         
-        return (energy, k, total_crossings)
+        return (energy, k, total_crossings, edge_crossings)
     
     def solve(self, iterations=1000, initial_temp=50.0, 
               cooling_rate=0.995, reheat_threshold=500, **kwargs):
@@ -231,10 +231,11 @@ class NumbaSolverStrategy(ISolverStrategy):
         _ = self._calculate_energy_fast()
         
         temp = initial_temp
-        current_energy, current_k, current_crossings = self._calculate_energy_fast()
+        current_energy, current_k, current_crossings, current_edge_crossings = self._calculate_energy_fast()
         
         best_energy = current_energy
         best_positions = self.positions_array.copy()
+        best_edge_crossings = current_edge_crossings
         
         no_improvement_count = 0
         accepted = 0
@@ -254,7 +255,7 @@ class NumbaSolverStrategy(ISolverStrategy):
             
             # 嘗試移動
             self.positions_array[node_id] = [new_x, new_y]
-            new_energy, _, _ = self._calculate_energy_fast()
+            new_energy, _, _, new_edge_crossings = self._calculate_energy_fast()
             delta = new_energy - current_energy
             
             # Metropolis 準則
@@ -282,6 +283,7 @@ class NumbaSolverStrategy(ISolverStrategy):
                 if current_energy < best_energy:
                     best_energy = current_energy
                     best_positions = self.positions_array.copy()
+                    best_edge_crossings = new_edge_crossings
                     no_improvement_count = 0
                 else:
                     no_improvement_count += 1
@@ -301,7 +303,7 @@ class NumbaSolverStrategy(ISolverStrategy):
             # 進度報告
             if (i + 1) % 100 == 0:
                 elapsed = time.time() - start_time
-                current_energy, current_k, current_crossings = self._calculate_energy_fast()
+                current_energy, current_k, current_crossings, _ = self._calculate_energy_fast()
                 speed = (i + 1) / elapsed
                 print(f"  [{i+1:>4}/{iterations}] E={current_energy:>8.0f}, K={current_k:>2}, "
                       f"X={current_crossings:>4}, T={temp:>5.2f}, "
@@ -315,15 +317,27 @@ class NumbaSolverStrategy(ISolverStrategy):
             self.state._positions[node_id] = point
             self.state._location_to_node[point] = node_id
         
-        final_energy, final_k, final_crossings = self._calculate_energy_fast()
+        final_energy, final_k, final_crossings, final_edge_crossings = self._calculate_energy_fast()
         total_time = time.time() - start_time
         
         print(f"\n[DONE] Completed! Total time: {total_time:.2f}s, Speed: {iterations/total_time:.1f} it/s")
         
+        # Construct nodes list for return
+        nodes = []
+        for node_id in range(self.graph.num_nodes):
+            pos = self.state.get_position(node_id)
+            nodes.append({
+                'id': node_id,
+                'x': pos.x,
+                'y': pos.y
+            })
+
         return {
+            'nodes': nodes,
             'energy': final_energy,
             'k': final_k,
             'total_crossings': final_crossings,
+            'edge_crossings': best_edge_crossings, # Use best tracked crossings
             'iterations': iterations,
             'acceptance_rate': accepted / iterations,
             'time': total_time
@@ -332,7 +346,8 @@ class NumbaSolverStrategy(ISolverStrategy):
     def get_current_stats(self):
         """獲取當前統計"""
         self._update_positions_array()
-        energy, k, total_crossings = self._calculate_energy_fast()
+        self._update_positions_array()
+        energy, k, total_crossings, _ = self._calculate_energy_fast()
         
         return {
             'energy': energy,

@@ -1,0 +1,8 @@
+venv_cuda/
+__pycache__/
+*.pyc
+*.json
+!sample.json
+!benchmark_graph_40.json
+temp_optimizer_input.json
+.vscode/

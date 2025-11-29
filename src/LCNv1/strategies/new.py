@@ -158,7 +158,7 @@ class NewArchitectureSolverStrategy(ISolverStrategy):
         self.state = self.best_state.clone()
         
         # Calculate final statistics
-        k, total = self.cost_func.get_crossing_stats(self.graph, self.state)
+        k, total, edge_crossings = self.cost_func.get_crossing_stats(self.graph, self.state)
         
         # Convert back to JSON format
         nodes = []
@@ -183,7 +183,8 @@ class NewArchitectureSolverStrategy(ISolverStrategy):
             },
             'energy': self.best_energy,
             'k': k,
-            'total_crossings': total
+            'total_crossings': total,
+            'edge_crossings': edge_crossings
         }
     
     def get_current_stats(self) -> Dict[str, Any]:
@@ -191,7 +192,7 @@ class NewArchitectureSolverStrategy(ISolverStrategy):
         if self.graph is None or self.state is None:
             return {'error': 'No graph loaded'}
         
-        k, total = self.cost_func.get_crossing_stats(self.graph, self.state)
+        k, total, _ = self.cost_func.get_crossing_stats(self.graph, self.state)
         
         return {
             'energy': self.current_energy,

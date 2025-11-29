@@ -425,7 +425,7 @@ class SoftMaxCost(ICostFunction):
         
         k = max(edge_crossings) if edge_crossings else 0
         
-        return (k, total_crossings)
+        return (k, total_crossings, edge_crossings)
     
     def get_length_energy(self, graph: GraphData, state: GridState) -> float:
         """Get total length energy."""
