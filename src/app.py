@@ -317,7 +317,7 @@ class App(ctk.CTk):
         initial_temp = max(self.width_bounds, self.height_bounds) * 0.2
         current_temp = initial_temp
         
-        batch_size = 250 # Run 250 iterations between updates
+        batch_size = 300 # Run 300 iterations between updates
         
         # Cooling rate per STEP (not per batch)
         cooling_rate = 0.9995 

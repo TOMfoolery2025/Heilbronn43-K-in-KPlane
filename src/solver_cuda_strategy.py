@@ -273,6 +273,37 @@ class CUDASolverStrategy(ISolverStrategy):
             new_x = old_x + random.randint(-radius, radius)
             new_y = old_y + random.randint(-radius, radius)
             
+            # 2. Update GPU (Host -> Device transfer)
+            self.positions_gpu[node_id, 0] = new_x
+            self.positions_gpu[node_id, 1] = new_y
+            
+            # 3. Calculate New Energy
+            new_energy, new_k, new_crossings, new_edge_crossings = self._calculate_energy_gpu()
+            
+            # 4. Metropolis Criterion
+            delta = new_energy - current_energy
+            if delta < 0 or random.random() < math.exp(-delta / temp):
+                # Accept
+                current_energy = new_energy
+                current_k = new_k
+                current_crossings = new_crossings
+                current_edge_crossings = new_edge_crossings
+                accepted += 1
+                
+                if current_energy < best_energy:
+                    best_energy = current_energy
+                    best_positions = self.positions_gpu.copy()
+                    best_edge_crossings = current_edge_crossings.copy()
+            else:
+                # Reject - revert
+                self.positions_gpu[node_id, 0] = old_x
+                self.positions_gpu[node_id, 1] = old_y
+            
+            # 5. Cooling
+            temp *= cooling_rate
+            if temp < 0.1 and current_energy > 0:
+                temp = initial_temp * 0.5
+            
             if (i + 1) % 100 == 0:
                 elapsed = time.time() - start_time
                 speed = (i + 1) / elapsed
