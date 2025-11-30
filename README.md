@@ -1,3 +1,9 @@
+# Notes
+- All code included
+- Live Demo @ Heilbronn43LiveDemo
+- Presenation @ Heilbron 43
+- Group members: Swaraj Shrestha, Felix Nack, Tsai Ming-Han, Ziheng Li
+
 # K-Planar Graph Minimizer
 
 This repository contains a small GUI and optimizer to reduce edge crossings (k-planarity) of a graph. The GUI is built with CustomTkinter + Matplotlib; the optimizer uses a simulated annealing approach.
